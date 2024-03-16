@@ -34,7 +34,7 @@ const Form: React.FC<{
   setIsWalletModalOpen: React.Dispatch<React.SetStateAction<boolean>>;
 }> = ({ onSubmit, isDisabled, setSelectPairSelector, setIsWalletModalOpen }) => {
   const { publicKey } = useWalletPassThrough();
-  const { accounts } = useAccounts();
+  const { accounts, fetchAllTokens } = useAccounts();
   const {
     form,
     setForm,
@@ -133,11 +133,13 @@ const Form: React.FC<{
   const onClickSelectFromMint = useCallback(() => {
     if (fixedInputMint) return;
     setSelectPairSelector('fromMint');
+    fetchAllTokens();
   }, [fixedInputMint]);
 
   const onClickSelectToMint = useCallback(() => {
     if (fixedOutputMint) return;
     setSelectPairSelector('toMint');
+    fetchAllTokens();
   }, [fixedOutputMint]);
 
   const fixedOutputFomMintClass = useMemo(() => {

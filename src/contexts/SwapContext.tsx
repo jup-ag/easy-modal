@@ -162,7 +162,7 @@ export const SwapContextProvider: FC<{
   const { screen } = useScreenState();
   const { tokenMap } = useTokenContext();
   const { wallet } = useWalletPassThrough();
-  const { refresh: refreshAccount } = useAccounts();
+  const { refresh: refreshAccount, fetchTokenAccounts } = useAccounts();
 
   const walletPublicKey = useMemo(() => wallet?.adapter.publicKey?.toString(), [wallet?.adapter.publicKey]);
 
@@ -192,6 +192,11 @@ export const SwapContextProvider: FC<{
     const tokenInfo = form.toMint ? tokenMap.get(form.toMint) : null;
     return tokenInfo;
   }, [form.toMint, tokenMap]);
+
+  // Initial fetch token account
+  useEffect(() => {
+    fetchTokenAccounts([form.fromMint, form.toMint]);
+  }, [form.fromMint, form.toMint]);
 
   // Set value given initial amount
   const setupInitialAmount = useCallback(() => {

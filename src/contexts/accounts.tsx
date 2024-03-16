@@ -3,10 +3,13 @@ import { AccountLayout, TOKEN_PROGRAM_ID, Token, AccountInfo as TokenAccountInfo
 import { AccountInfo, PublicKey } from '@solana/web3.js';
 import { useQuery } from '@tanstack/react-query';
 import BN from 'bn.js';
-import React, { PropsWithChildren, useCallback, useContext, useEffect, useState } from 'react';
+import React, { PropsWithChildren, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { WRAPPED_SOL_MINT } from 'src/constants';
 import { fromLamports, getAssociatedTokenAddressSync } from 'src/misc/utils';
 import { useWalletPassThrough } from './WalletPassthroughProvider';
+import { useTokenContext } from './TokenContextProvider';
+import { checkIsToken2022, getMultipleAccountsInfo } from './utils';
+import Decimal from 'decimal.js';
 
 const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
 
@@ -22,6 +25,8 @@ interface IAccountContext {
   accounts: Record<string, IAccountsBalance>;
   loading: boolean;
   refresh: () => void;
+  fetchAllTokens: () => void;
+  fetchTokenAccounts: (mintsOrAccounts: (string | PublicKey)[]) => void;
 }
 
 interface ParsedTokenData {
@@ -57,6 +62,8 @@ const AccountContext = React.createContext<IAccountContext>({
   accounts: {},
   loading: true,
   refresh: () => {},
+  fetchAllTokens: () => {},
+  fetchTokenAccounts: () => {},
 });
 
 export interface TokenAccount {
@@ -121,11 +128,7 @@ const deserializeAccount = (data: Buffer) => {
   return accountInfo;
 };
 
-export const TokenAccountParser = (
-  pubkey: PublicKey,
-  info: AccountInfo<Buffer>,
-  programId: PublicKey,
-): TokenAccount | undefined => {
+export const TokenAccountParser = (pubkey: PublicKey, info: AccountInfo<Buffer>): TokenAccount | undefined => {
   const tokenAccountInfo = deserializeAccount(info.data);
 
   if (!tokenAccountInfo) return;
@@ -139,6 +142,7 @@ export const TokenAccountParser = (
 const AccountsProvider: React.FC<PropsWithChildren> = ({ children }) => {
   const { publicKey, connected } = useWalletPassThrough();
   const { connection } = useConnection();
+  const { tokenMap } = useTokenContext();
 
   const fetchNative = useCallback(async () => {
     if (!publicKey || !connected) return null;
@@ -155,30 +159,76 @@ const AccountsProvider: React.FC<PropsWithChildren> = ({ children }) => {
     }
   }, [publicKey, connected]);
 
+  const cacheKey = useMemo(
+    () => [connection.rpcEndpoint, publicKey?.toString() || ''],
+    [connection.rpcEndpoint, publicKey?.toString()],
+  );
+
+  const hasRequestedAllToken = useRef(false);
+  const [tokenOrMintAccountsToFetch, setTokenOrMintAccountsToFetch] = useState<(string | PublicKey)[]>([]);
+  const {
+    refetch: fetchTokenAccounts,
+    data: fetchedAtaToUserAccount,
+    isLoading: isFetchingTokenAcounts,
+    // variables,
+    remove,
+  } = useQuery(
+    ['specific-token-accounts', ...cacheKey, tokenOrMintAccountsToFetch.map((t) => t.toString()).join()],
+    async () => {
+      const mintsOrAccounts = tokenOrMintAccountsToFetch;
+      if (!publicKey) {
+        return new Map<string, TokenAccount>();
+      }
+      const atasSet = mintsOrAccounts.reduce((atas, mintOrAta) => {
+        const mintStr = mintOrAta.toString();
+        const tokenInfo = tokenMap.get(mintStr);
+        if (tokenInfo) {
+          const isToken2022 = checkIsToken2022(tokenInfo);
+          const tokenAta = getAssociatedTokenAddressSync(
+            new PublicKey(mintStr),
+            publicKey!,
+            isToken2022 ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID,
+          );
+          atas.add(tokenAta.toString());
+        } else {
+          // could be ATA
+          atas.add(mintOrAta.toString());
+        }
+
+        return atas;
+      }, new Set<string>());
+      const atas = Array.from(atasSet).map((ata) => new PublicKey(ata));
+      const accountToAccountInfosMap = await getMultipleAccountsInfo(connection, atas);
+      const ataToTokenAccountMap = Array.from(accountToAccountInfosMap).reduce(
+        (_ataToTokenAccountMap, [pubkey, account]) => {
+          if (!account) return _ataToTokenAccountMap;
+          const tokenAccount = TokenAccountParser(new PublicKey(pubkey), account);
+          if (tokenAccount) {
+            _ataToTokenAccountMap.set(pubkey, tokenAccount);
+          }
+          return _ataToTokenAccountMap;
+        },
+        new Map<string, TokenAccount>(),
+      );
+      return ataToTokenAccountMap;
+    },
+    {
+      initialData: new Map<string, TokenAccount>(),
+      enabled: tokenOrMintAccountsToFetch.length > 0 && hasRequestedAllToken.current === false,
+      refetchInterval: 10_000,
+    },
+  );
+
   const fetchAllTokens = useCallback(async () => {
     if (!publicKey || !connected) return {};
+
+    hasRequestedAllToken.current = true;
 
     const [tokenAccounts, token2022Accounts] = await Promise.all(
       [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID].map((tokenProgramId) =>
         connection.getParsedTokenAccountsByOwner(publicKey, { programId: tokenProgramId }, 'confirmed'),
       ),
     );
-
-    const response = await connection.getTokenAccountsByOwner(
-      publicKey,
-      {
-        programId: TOKEN_PROGRAM_ID,
-      },
-      'confirmed',
-    );
-
-    const result = response.value.reduce((acc, { pubkey, account }) => {
-      const tokenAccount = TokenAccountParser(pubkey, account, TOKEN_PROGRAM_ID);
-      if (tokenAccount) {
-        acc.push(tokenAccount);
-      }
-      return acc;
-    }, new Array<TokenAccount>());
 
     const reducedResult = [...tokenAccounts.value, ...token2022Accounts.value].reduce(
       (acc, item: ParsedTokenData) => {
@@ -206,10 +256,40 @@ const AccountsProvider: React.FC<PropsWithChildren> = ({ children }) => {
     isLoading,
     refetch,
   } = useQuery<Record<string, IAccountsBalance>>(
-    ['accounts', publicKey],
+    ['accounts', publicKey?.toString(), fetchedAtaToUserAccount.size],
     async () => {
+      const nativeAccount = await fetchNative();
+
+      if (hasRequestedAllToken.current === false) {
+        const requestedTokenAccounts = [...fetchedAtaToUserAccount].reduce(
+          (acc, [key, value]: [string, TokenAccount]) => {
+            const balance = value.info.amount.toNumber();
+            const tokenInfo = tokenMap.get(value.info.mint.toString());
+
+            return {
+              ...acc,
+              [value.info.mint.toString()]: {
+                balance: new Decimal(balance).div(10 ** (tokenInfo?.decimals || 0)).toNumber(),
+                balanceLamports: new BN(balance),
+                pubkey: value.pubkey,
+                hasBalance: value.info.amount.toNumber() > 0,
+                decimals: tokenInfo?.decimals || 0,
+              },
+            };
+          },
+          {},
+        );
+
+        return nativeAccount
+          ? {
+              [WRAPPED_SOL_MINT.toString()]: nativeAccount,
+              ...requestedTokenAccounts,
+            }
+          : requestedTokenAccounts;
+      }
+
       // Fetch all tokens balance
-      const [nativeAccount, accounts] = await Promise.all([fetchNative(), fetchAllTokens()]);
+      const accounts = await fetchAllTokens();
       return {
         ...accounts,
         ...(nativeAccount ? { [WRAPPED_SOL_MINT.toString()]: nativeAccount } : {}),
@@ -218,11 +298,39 @@ const AccountsProvider: React.FC<PropsWithChildren> = ({ children }) => {
     {
       enabled: Boolean(publicKey?.toString() && connected),
       refetchInterval: 10_000,
+      refetchIntervalInBackground: false,
+      // Aggresively cache this, so multiple calls won't trigger multiple fetches
+      keepPreviousData: true,
     },
   );
 
   return (
-    <AccountContext.Provider value={{ accounts: accounts || {}, loading: isLoading, refresh: refetch }}>
+    <AccountContext.Provider
+      value={{
+        accounts: accounts || {},
+        loading: isLoading || isFetchingTokenAcounts,
+        refresh: useCallback(() => {
+          if (hasRequestedAllToken.current === false) {
+            fetchTokenAccounts();
+          } else {
+            refetch();
+          }
+        }, []),
+        fetchAllTokens: useCallback(() => {
+          hasRequestedAllToken.current = true;
+          refetch();
+        }, []),
+        fetchTokenAccounts: useCallback(
+          (tokenOrMintAccountsToFetch) => {
+            const filteredTokenAccounts = tokenOrMintAccountsToFetch?.filter(Boolean);
+            if (filteredTokenAccounts) {
+              setTokenOrMintAccountsToFetch(filteredTokenAccounts);
+            }
+          },
+          [setTokenOrMintAccountsToFetch],
+        ),
+      }}
+    >
       {children}
     </AccountContext.Provider>
   );
