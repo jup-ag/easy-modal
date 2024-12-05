@@ -91,7 +91,7 @@ Your dApp already has a `<WalletProvider />`.
 window.Jupiter.init({ enableWalletPassthrough: true });
 ```
 
-Then, syncronise wallet state between your dApp and Jupiter Terminal with `syncProps()`
+Then, synchronize wallet state between your dApp and Jupiter Terminal with `syncProps()`
 
 ```tsx
 import { useWallet } from '@solana/wallet-adapter-react'; // Or @jup-ag/wallet-adapter;
@@ -144,7 +144,7 @@ Or, [check out our fully typed API reference](https://github.com/jup-ag/terminal
 
 ### Typescript Support
 
-Since Jupiter Terminal is not published on npm, and are only importable via CDN, to get proper typing, you can create a typing decalarion `jupiter-terminal.d.ts` file in your project, and copy the contents in [src/types/index.d.ts](https://github.com/jup-ag/terminal/blob/main/src/types/index.d.ts)
+Since Jupiter Terminal is not published on npm, and are only importable via CDN, to get proper typing, you can create a typing declaration `jupiter-terminal.d.ts` file in your project, and copy the contents in [src/types/index.d.ts](https://github.com/jup-ag/terminal/blob/main/src/types/index.d.ts)
 
 ```tsx
 declare global {
