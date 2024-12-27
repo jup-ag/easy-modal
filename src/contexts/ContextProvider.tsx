@@ -8,7 +8,9 @@ import { NetworkConfigurationProvider, useNetworkConfiguration } from './Network
 import { PreferredExplorerProvider } from './preferredExplorer';
 import { SolflareWalletAdapter } from '@solana/wallet-adapter-wallets';
 import { IWalletNotification } from '@jup-ag/wallet-adapter/dist/types/contexts/WalletConnectionProvider';
+import { useWrappedReownAdapter } from '@jup-ag/jup-mobile-adapter';
 
+const noop = () => {};
 export const HARDCODED_WALLET_STANDARDS: { id: string; name: WalletName; url: string; icon: string }[] = [
   {
     id: 'Phantom',
@@ -37,16 +39,29 @@ export const HARDCODED_WALLET_STANDARDS: { id: string; name: WalletName; url: st
   },
 ];
 
-const noop = () => {};
 const WalletContextProvider: React.FC<PropsWithChildren<IInit>> = ({
   autoConnect,
   endpoint,
   connectionObj,
   children,
 }) => {
-  const { networkConfiguration } = useNetworkConfiguration();
-  const network = networkConfiguration as WalletAdapterNetwork;
-  const selectedEndpoint: string = useMemo(() => endpoint ?? clusterApiUrl(network), [endpoint, network]);
+  const { reownAdapter, jupiterAdapter } = useWrappedReownAdapter({
+    appKitOptions: {
+      metadata: {
+        name: 'Jupiter',
+        description: `Jupiter is one of the largest decentralized trading platform and one of the most active governance community in crypto. We're building the everything exchange for everyone.`,
+        url: 'https://jup.ag', // origin must match your domain & subdomain
+        icons: ['https://jup.ag/svg/jupiter-logo.png'],
+      },
+      projectId: '4a4e231c4004ef7b77076a87094fba61', // Fill in your project id
+      features: {
+        analytics: false,
+        socials: ['google', 'x', 'apple'],
+        email: false,
+      },
+      enableWallets: false,
+    },
+  });
 
   const enableWalletPassthrough = (() => {
     if (typeof window === 'undefined') return undefined;
@@ -59,8 +74,8 @@ const WalletContextProvider: React.FC<PropsWithChildren<IInit>> = ({
     }
 
     // Keeping Solflare to support Metamask Snaps
-    return [new SolflareWalletAdapter()];
-  }, [enableWalletPassthrough]);
+    return [new SolflareWalletAdapter(), reownAdapter, jupiterAdapter];
+  }, [enableWalletPassthrough, reownAdapter, jupiterAdapter]);
 
   const [showWalletStatus, setShowWalletStatus] = useState<{
     show: boolean;
@@ -88,6 +103,7 @@ const WalletContextProvider: React.FC<PropsWithChildren<IInit>> = ({
               },
               hardcodedWallets: HARDCODED_WALLET_STANDARDS,
               walletPrecedence: [
+                'Jupiter Mobile' as WalletName,
                 'Phantom' as WalletName,
                 'Backpack' as WalletName,
                 'OKX Wallet' as WalletName,
